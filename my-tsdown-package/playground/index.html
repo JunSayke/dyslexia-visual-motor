@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Kinematic Feature Analysis</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div class="app-container">
+    <header>
+      <h1>Kinematic Feature Analysis</h1>
+      <div class="controls">
+        <select id="shape-select">
+          <option value="s">s</option>
+          <option value="z">z</option>
+          <option value="b">b</option>
+          <option value="d">d</option>
+          <option value="p">p</option>
+          <option value="q">q</option>
+          <option value="j">j</option>
+          <option value="3">3</option>
+          <option value="7">7</option>
+          <option value="spiral">Spiral (Tremor Test)</option>
+        </select>
+        <button id="clear-btn">Clear</button>
+        <button id="replay-btn">▶ Replay</button>
+        <button id="validate-btn" class="primary">Validate Strokes</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <div class="panel">
+        <h3>Reference</h3>
+        <canvas id="reference-canvas" width="400" height="400"></canvas>
+      </div>
+      <div class="panel">
+        <h3>Draw Here</h3>
+        <canvas id="drawing-canvas" width="400" height="400" style="touch-action: none;"></canvas>
+      </div>
+    </main>
+
+    <footer id="results-panel">
+      <pre id="output-log">Waiting for input...</pre>
+    </footer>
+  </div>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>
