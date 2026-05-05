@@ -27,9 +27,6 @@ importers:
       '@types/node':
         specifier: ^25.5.0
         version: 25.6.0
-      '@typescript/native-preview':
-        specifier: 7.0.0-dev.20260328.1
-        version: 7.0.0-dev.20260328.1
       bumpp:
         specifier: ^11.0.1
         version: 11.0.1
@@ -1122,6 +1119,7 @@ snapshots:
       '@typescript/native-preview-linux-x64': 7.0.0-dev.20260328.1
       '@typescript/native-preview-win32-arm64': 7.0.0-dev.20260328.1
       '@typescript/native-preview-win32-x64': 7.0.0-dev.20260328.1
+    optional: true
 
   '@vitest/expect@4.1.5':
     dependencies:

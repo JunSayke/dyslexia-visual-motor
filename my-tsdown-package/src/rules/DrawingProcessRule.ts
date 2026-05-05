@@ -1,33 +1,114 @@
+import simplify from 'simplify-js';
+import { FeatureExtractor } from '../core/FeatureExtractor';
 import type { KinematicRule, Stroke, KinematicResult } from '../core/KinematicRule';
+import type { ReferenceProfile } from '../core/ReferenceProfile';
 
 export class DrawingProcessRule implements KinematicRule {
-  public evaluate(strokes: Stroke[], referenceChar: string): KinematicResult {
-    if (strokes.length === 0) return { passed: false, score: 0, message: "No data." };
+  /**
+   * @param liftTolerance Extra pen-lifts allowed beyond the reference.
+   * @param jitterRatioThreshold Maximum allowed increase in structural complexity ratio.
+   */
+  constructor(
+    private readonly liftTolerance = 1,
+    private readonly jitterRatioThreshold = 0.5 // 50% increase in complexity
+  ) {}
 
-    const strokeCount = strokes.length;
-    let excessiveLifts = false;
+  /**
+   * Calculates the 'Structural Efficiency' of a drawing.
+   * Instead of raw counts, it returns the ratio of (Simplified Points / Total Points).
+   * A smooth stroke has a very low ratio; a jittery/tremulous stroke has a high ratio
+   * because more points are required to preserve the "noise" during simplification.
+   */
+  private getStructuralEfficiency(strokes: Stroke[]): number {
+    const allPoints = strokes.flat();
+    if (allPoints.length < 5) return 1.0;
 
-    // Single-continuous letters shouldn't have many lifts
-    if (['s', 'z', '3', '7', 'spiral'].includes(referenceChar) && strokeCount > 2) {
-      excessiveLifts = true;
+    const xs = allPoints.map(p => p.x);
+    const ys = allPoints.map(p => p.y);
+    const maxDim = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 1);
+
+    const tolerance = maxDim * 0.02;
+    let simplifiedCount = 0;
+
+    for (const stroke of strokes) {
+      if (stroke.length < 3) {
+        simplifiedCount += stroke.length;
+        continue;
+      }
+      simplifiedCount += simplify(stroke, tolerance, true).length;
     }
-    // Letters with stems (b, d, p, q, j) might naturally have 2 strokes
-    if (['b', 'd', 'p', 'q', 'j'].includes(referenceChar) && strokeCount > 3) {
-      excessiveLifts = true;
+
+    return simplifiedCount / allPoints.length;
+  }
+
+  public evaluate(strokes: Stroke[], reference: ReferenceProfile): KinematicResult {
+    if (strokes.length === 0) {
+      return { passed: false, score: 0, message: 'No drawing data.' };
     }
 
-    // Check drawing direction of the main stroke (top-to-bottom is standard)
-    const mainStroke = strokes.reduce((prev, curr) => curr.length > prev.length ? curr : prev, strokes[0]);
-    const startY = mainStroke[0].y;
-    const endY = mainStroke[mainStroke.length - 1].y;
-    const drawnBottomToTop = startY > endY;
+    const refFingerprint = reference.fingerprint;
+    const attemptStrokeCount = strokes.length;
+    const referenceStrokeCount = refFingerprint.strokeCount;
 
-    // Note: We don't necessarily fail them for bottom-to-top, but it's vital metadata for the clinician
+    // ── 1. Pen-lift check ──────────────────────────────────────────────────
+    const extraLifts = Math.max(0, attemptStrokeCount - referenceStrokeCount);
+    const excessiveLifts = extraLifts > this.liftTolerance;
+
+    // ── 2. Jitter Analysis (Efficiency Ratio) ──────────────────────────────
+    // We compare how much "noisier" the attempt is compared to the reference.
+    const refEfficiency = this.getStructuralEfficiency(reference.referenceStrokes);
+    const attemptEfficiency = this.getStructuralEfficiency(strokes);
+    
+    // Normalize the ratio increase. If ref is 0.1 and attempt is 0.2, that's a 100% increase.
+    const efficiencyDrop = (attemptEfficiency - refEfficiency) / (refEfficiency || 1);
+    const hasHighJitter = efficiencyDrop > this.jitterRatioThreshold;
+
+    // ── 3. Micro-Reversal Analysis (Tremor) ────────────────────────────────
+    let tremorWarning = false;
+    try {
+      const attempt = FeatureExtractor.extract(strokes);
+      // Compare reversal density (reversals per point) rather than raw count
+      const refRevDensity = refFingerprint.curvature.reversalCount / reference.referenceStrokes.flat().length;
+      const attRevDensity = attempt.curvature.reversalCount / strokes.flat().length;
+      
+      if (attRevDensity > refRevDensity * 2.5 + 0.05) {
+        tremorWarning = true;
+      }
+    } catch {
+      // Fallback to jitter check only
+    }
+
+    const dysfluencyDetected = hasHighJitter || tremorWarning;
+
+    // ── 4. Scoring ─────────────────────────────────────────────────────────
+    let score = 1.0;
+    if (excessiveLifts) score -= (extraLifts * 0.2);
+    if (dysfluencyDetected) score -= 0.4;
+    
+    const passed = !excessiveLifts && !dysfluencyDetected;
+
+    // ── 5. Output ──────────────────────────────────────────────────────────
+    const messages: string[] = [];
+    if (excessiveLifts) {
+      messages.push(`Excessive Pen Lifts (${attemptStrokeCount} vs ref ${referenceStrokeCount}).`);
+    }
+    if (dysfluencyDetected) {
+      messages.push('Dysfluency detected: Stroke shows significant tremor or structural noise.');
+    }
+    if (passed) {
+      messages.push('Drawing process is consistent with reference kinematics.');
+    }
+
     return {
-      passed: !excessiveLifts,
-      score: excessiveLifts ? 0 : 1,
-      message: excessiveLifts ? `Process Error: Excessive pen lifts detected (${strokeCount} strokes).` : "Drawing process is continuous.",
-      metadata: { strokeCount, drawnBottomToTop }
+      passed,
+      score: +Math.max(0, score).toFixed(3),
+      message: messages.join(' '),
+      metadata: {
+        extraLifts,
+        efficiencyDrop: +efficiencyDrop.toFixed(3),
+        tremorWarning,
+        attemptStrokeCount
+      },
     };
   }
 }

@@ -1,33 +1,199 @@
-import type { KinematicRule, Stroke, KinematicResult } from '../core/KinematicRule';
+import { FeatureExtractor } from "../core/FeatureExtractor";
+import type {
+  KinematicRule,
+  Stroke,
+  KinematicResult,
+  Point,
+} from "../core/KinematicRule";
+import type { ReferenceProfile } from "../core/ReferenceProfile";
 
 export class ProportionalDistortionRule implements KinematicRule {
-  // Expected Width/Height ratios for standard characters
-  private expectedRatios: Record<string, number> = {
-    's': 0.6, 'z': 0.8, 'b': 0.6, 'd': 0.6, 'p': 0.6, 'q': 0.6, 'j': 0.4, '3': 0.6, '7': 0.7, 'spiral': 1.0
-  };
+  // Tightened default tolerance since log-ratio is more precise
+  constructor(private readonly tolerance = 0.35) {}
 
-  public evaluate(strokes: Stroke[], referenceChar: string): KinematicResult {
-    const allPoints = strokes.flat();
-    if (allPoints.length < 5) return { passed: false, score: 0, message: "Insufficient data." };
+  private readonly axisTolerance = 0.4;
+  private readonly minScaleRatio = 0.35;
+  private readonly maxScaleRatio = 3.0;
+  private readonly trimRatio = 0.05;
 
-    const xs = allPoints.map(p => p.x);
-    const ys = allPoints.map(p => p.y);
-    const width = Math.max(...xs) - Math.min(...xs);
-    const height = Math.max(...ys) - Math.min(...ys);
-    
-    // Protect against division by zero
-    const actualRatio = height > 0 ? width / height : 1; 
-    const expectedRatio = this.expectedRatios[referenceChar] || 0.6;
+  public evaluate(
+    strokes: Stroke[],
+    reference: ReferenceProfile,
+  ): KinematicResult {
+    const attemptPoints = strokes.flat();
+    const referencePoints = reference.referenceStrokes.flat();
+    if (attemptPoints.length < 3 || referencePoints.length < 3) {
+      return { passed: false, score: 0, message: "Insufficient data." };
+    }
 
-    // Tolerance: Allow 40% deviation from the ideal ratio
-    const deviation = Math.abs(actualRatio - expectedRatio) / expectedRatio;
-    const isDistorted = deviation > 0.40;
+    const refBounds = this.trimmedBounds(referencePoints, this.trimRatio);
+    const attBounds = this.trimmedBounds(attemptPoints, this.trimRatio);
+
+    const expectedRatio = refBounds.width / refBounds.height;
+    const actualRatio = attBounds.width / attBounds.height;
+
+    // 1. Aspect ratio check (robust to outliers via trimmed bounds)
+    const logDeviation = Math.abs(Math.log(actualRatio / expectedRatio));
+    const ratioPassed = logDeviation <= this.tolerance;
+
+    // 2. Axis balance check (row/column mass vs reference)
+    const refGrid = reference.fingerprint.densityGrid;
+    const attemptGrid = FeatureExtractor.computeDensityGrid(
+      attemptPoints,
+      FeatureExtractor.boundingBox(attemptPoints),
+      refGrid.resolution,
+    );
+    const axisError = this.axisProfileError(
+      refGrid.values,
+      attemptGrid.values,
+      refGrid.resolution,
+    );
+    const axisPassed = axisError <= this.axisTolerance;
+
+    // 3. Absolute scale check (extreme size mismatch only)
+    const refArea = refBounds.width * refBounds.height;
+    const attArea = attBounds.width * attBounds.height;
+    const areaRatio = attArea / refArea;
+    const scaleMismatch =
+      areaRatio < this.minScaleRatio || areaRatio > this.maxScaleRatio;
+
+    const passed = ratioPassed && axisPassed && !scaleMismatch;
+
+    const ratioScore = this.normalizedScore(logDeviation, this.tolerance);
+    const axisScore = this.normalizedScore(axisError, this.axisTolerance);
+    let score = (ratioScore + axisScore) / 2;
+    if (scaleMismatch) {
+      score = Math.max(0, score - 0.3);
+    }
+
+    const messages: string[] = [];
+    if (!ratioPassed) {
+      messages.push(
+        `Proportional Distortion: Shape is too ${actualRatio > expectedRatio ? "wide" : "tall"}.`,
+      );
+    }
+    if (!axisPassed) {
+      const axisHint =
+        this.axisDominanceHint(refGrid.values, attemptGrid.values, refGrid.resolution);
+      messages.push(
+        `Proportional Distortion: ${axisHint} differs from reference.`,
+      );
+    }
+    if (scaleMismatch) {
+      messages.push(
+        `Scale Mismatch: Drawing is significantly ${areaRatio < 1 ? "smaller" : "larger"} than reference.`,
+      );
+    }
+
+    const message =
+      messages.length === 0 ? "Proportions are normal." : messages.join(" ");
 
     return {
-      passed: !isDistorted,
-      score: Math.max(0, 1 - deviation), // Closer to 0 deviation = higher score
-      message: isDistorted ? "Proportional Distortion: Shape is overly squashed or stretched." : "Proportions are normal.",
-      metadata: { actualRatio: Number(actualRatio.toFixed(2)), expectedRatio, deviation: Number(deviation.toFixed(2)) }
+      passed,
+      score: +score.toFixed(3),
+      message,
+      metadata: {
+        actual: Number(actualRatio.toFixed(2)),
+        expected: Number(expectedRatio.toFixed(2)),
+        areaRatio: Number(areaRatio.toFixed(2)),
+        logDeviation: Number(logDeviation.toFixed(3)),
+        axisError: Number(axisError.toFixed(3)),
+        tolerance: this.tolerance,
+        axisTolerance: this.axisTolerance,
+        scaleBounds: {
+          min: this.minScaleRatio,
+          max: this.maxScaleRatio,
+        },
+        trimRatio: this.trimRatio,
+      },
     };
+  }
+
+  private trimmedBounds(points: Point[], trimRatio: number): {
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+    width: number;
+    height: number;
+  } {
+    if (points.length < 5 || trimRatio <= 0) {
+      return FeatureExtractor.boundingBox(points);
+    }
+
+    const xs = points.map(p => p.x).sort((a, b) => a - b);
+    const ys = points.map(p => p.y).sort((a, b) => a - b);
+    const lo = Math.floor(xs.length * trimRatio);
+    const hi = Math.max(lo, Math.ceil(xs.length * (1 - trimRatio)) - 1);
+
+    const minX = xs[lo] ?? xs[0];
+    const maxX = xs[hi] ?? xs[xs.length - 1];
+    const minY = ys[lo] ?? ys[0];
+    const maxY = ys[hi] ?? ys[ys.length - 1];
+
+    return {
+      minX,
+      minY,
+      maxX,
+      maxY,
+      width: (maxX - minX) || 1,
+      height: (maxY - minY) || 1,
+    };
+  }
+
+  private axisProfileError(
+    refGrid: number[],
+    attGrid: number[],
+    resolution: number,
+  ): number {
+    const ref = this.axisMass(refGrid, resolution);
+    const att = this.axisMass(attGrid, resolution);
+    const rowError = this.l1Distance(ref.rows, att.rows) / 2;
+    const colError = this.l1Distance(ref.cols, att.cols) / 2;
+    return (rowError + colError) / 2;
+  }
+
+  private axisDominanceHint(
+    refGrid: number[],
+    attGrid: number[],
+    resolution: number,
+  ): string {
+    const ref = this.axisMass(refGrid, resolution);
+    const att = this.axisMass(attGrid, resolution);
+    const rowError = this.l1Distance(ref.rows, att.rows);
+    const colError = this.l1Distance(ref.cols, att.cols);
+    return rowError >= colError ? "vertical balance" : "horizontal balance";
+  }
+
+  private axisMass(grid: number[], resolution: number): {
+    rows: number[];
+    cols: number[];
+  } {
+    const rows = new Array(resolution).fill(0);
+    const cols = new Array(resolution).fill(0);
+
+    for (let row = 0; row < resolution; row++) {
+      for (let col = 0; col < resolution; col++) {
+        const value = grid[row * resolution + col] ?? 0;
+        rows[row] += value;
+        cols[col] += value;
+      }
+    }
+
+    return { rows, cols };
+  }
+
+  private l1Distance(a: number[], b: number[]): number {
+    let total = 0;
+    const n = Math.max(a.length, b.length);
+    for (let i = 0; i < n; i++) {
+      total += Math.abs((a[i] ?? 0) - (b[i] ?? 0));
+    }
+    return total;
+  }
+
+  private normalizedScore(error: number, tolerance: number): number {
+    if (tolerance <= 0) return 0;
+    return Math.max(0, 1 - error / tolerance);
   }
 }

@@ -1,22 +1,23 @@
 {
-  "name": "tsdown-starter",
+  "name": "dyslexia-visual-motor",
   "type": "module",
-  "version": "0.0.0",
-  "description": "A starter for creating a TypeScript package.",
-  "author": "Author Name <author.name@mail.com>",
+  "version": "1.0.0",
+  "description": "A kinematic analysis engine for detecting visual-motor dysfluency and reversals.",
+  "author": "Antonio Ubaldo <antonio.junjr@gmail.com>",
   "license": "MIT",
-  "homepage": "https://github.com/author/library#readme",
+  "homepage": "https://github.com/junsayke/dyslexia-visual-motor#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/author/library.git"
+    "url": "git+https://github.com/junsayke/dyslexia-visual-motor.git"
   },
   "bugs": {
-    "url": "https://github.com/author/library/issues"
+    "url": "https://github.com/junsayke/dyslexia-visual-motor/issues"
   },
   "exports": {
     ".": "./dist/index.mjs",
     "./package.json": "./package.json"
   },
+  "types": "./dist/index.d.ts",
   "files": [
     "dist"
   ],
@@ -27,12 +28,11 @@
     "test": "vitest",
     "typecheck": "tsc --noEmit",
     "release": "bumpp",
-    "prepublishOnly": "pnpm run build"
+    "prepublishOnly": "npm run build"
   },
   "devDependencies": {
     "@types/geometric": "^2.5.3",
     "@types/node": "^25.5.0",
-    "@typescript/native-preview": "7.0.0-dev.20260328.1",
     "bumpp": "^11.0.1",
     "tsdown": "^0.21.7",
     "typescript": "^6.0.2",

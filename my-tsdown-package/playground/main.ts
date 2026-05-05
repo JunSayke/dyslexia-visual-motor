@@ -1,175 +1,250 @@
 import { getStroke } from 'perfect-freehand';
 import type { Stroke } from '../src/core/KinematicRule';
+import { FeatureExtractor } from '../src/core/FeatureExtractor';
+import { createReferenceProfile } from '../src/core/ReferenceProfile';
+import type { ReferenceProfile } from '../src/core/ReferenceProfile';
 
-import { KinematicReversalRule } from '../src/rules/KinematicReversalRule';
+import { ReversalRule } from '../src/rules/ReversalRule';
 import { TimeTakenRule } from '../src/rules/TimeTakenRule';
 import { ProportionalDistortionRule } from '../src/rules/ProportionalDistortionRule';
-import { DrawingProcessRule } from '../src/rules/DrawingProcessRule';
 import { ReferenceSimilarityRule } from '../src/rules/ReferenceSimilarityRule';
 
+// ── DOM refs ──────────────────────────────────────────────────────────────────
 const drawingCanvas = document.getElementById('drawing-canvas') as HTMLCanvasElement;
-const refCanvas = document.getElementById('reference-canvas') as HTMLCanvasElement;
-const ctx = drawingCanvas.getContext('2d')!;
-const refCtx = refCanvas.getContext('2d')!;
-const validateBtn = document.getElementById('validate-btn') as HTMLButtonElement;
-const clearBtn = document.getElementById('clear-btn') as HTMLButtonElement;
-const replayBtn = document.getElementById('replay-btn') as HTMLButtonElement;
-const shapeSelect = document.getElementById('shape-select') as HTMLSelectElement;
-const outputLog = document.getElementById('output-log')!;
+const refCanvas     = document.getElementById('reference-canvas') as HTMLCanvasElement;
+const ctx           = drawingCanvas.getContext('2d')!;
+const refCtx        = refCanvas.getContext('2d')!;
 
+const modeToggle    = document.getElementById('mode-toggle') as HTMLButtonElement;
+const saveRefBtn    = document.getElementById('save-ref-btn') as HTMLButtonElement;
+const refLabelInput = document.getElementById('ref-label') as HTMLInputElement;
+const refSelect     = document.getElementById('ref-select') as HTMLSelectElement;
+const clearBtn      = document.getElementById('clear-btn') as HTMLButtonElement;
+const replayBtn     = document.getElementById('replay-btn') as HTMLButtonElement;
+const validateBtn   = document.getElementById('validate-btn') as HTMLButtonElement;
+const outputLog     = document.getElementById('output-log')!;
+const modeLabel     = document.getElementById('mode-label')!;
+const refPanel      = document.getElementById('ref-controls')!;
+const testPanel     = document.getElementById('test-controls')!;
+
+// ── State ─────────────────────────────────────────────────────────────────────
+type AppMode = 'record-reference' | 'test';
+
+let mode: AppMode = 'record-reference';
 let strokes: Stroke[] = [];
 let currentStroke: Stroke = [];
-
-// Initialize rules
-const reversalRule = new KinematicReversalRule();
-const timeRule = new TimeTakenRule();
-const propRule = new ProportionalDistortionRule();
-const processRule = new DrawingProcessRule();
-const similarityRule = new ReferenceSimilarityRule();
-
-// --- REPLAY ENGINE VARIABLES ---
+let savedReferences: ReferenceProfile[] = [];
 let isReplaying = false;
 let replayReqId: number | null = null;
 
-function drawReference() {
-  refCtx.fillStyle = '#fafafa';
-  refCtx.fillRect(0, 0, refCanvas.width, refCanvas.height);
-  refCtx.fillStyle = '#000';
+// ── Rules ─────────────────────────────────────────────────────────────────────
+const reversalRule  = new ReversalRule();
+const timeRule      = new TimeTakenRule();
+const propRule      = new ProportionalDistortionRule();
+const similarityRule = new ReferenceSimilarityRule();
 
-  const shape = shapeSelect.value;
-
-  if (shape === 'spiral') {
-    refCtx.beginPath();
-    const centerX = refCanvas.width / 2;
-    const centerY = refCanvas.height / 2;
-    for (let i = 0; i < 360; i++) {
-      const angle = 0.1 * i;
-      const x = centerX + (1 + angle) * Math.cos(angle) * 12;
-      const y = centerY + (1 + angle) * Math.sin(angle) * 12;
-      if (i === 0) refCtx.moveTo(x, y);
-      else refCtx.lineTo(x, y);
-    }
-    refCtx.lineWidth = 4;
-    refCtx.stroke();
-  } else {
-    refCtx.font = '250px Arial';
-    refCtx.textAlign = 'center';
-    refCtx.textBaseline = 'middle';
-    refCtx.fillText(shape, refCanvas.width / 2, refCanvas.height / 2);
-  }
-}
-
-// Render accepts an optional parameter so we can pass partial strokes during a replay
-function render(renderStrokes: Stroke[] = strokes) {
-  ctx.fillStyle = '#fafafa';
-  ctx.fillRect(0, 0, drawingCanvas.width, drawingCanvas.height);
-  ctx.fillStyle = '#000';
+// ── Rendering ─────────────────────────────────────────────────────────────────
+function renderStrokes(canvas: HTMLCanvasElement, context: CanvasRenderingContext2D, renderStrokes: Stroke[]) {
+  context.fillStyle = '#fafafa';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = mode === 'record-reference' ? '#6366f1' : '#000';
 
   renderStrokes.forEach(s => {
     if (s.length < 2) return;
-    const inputPoints = s.map(p => [p.x, p.y, p.pressure]);
-    const outline = getStroke(inputPoints, {
-      size: 14,
-      thinning: 0.5,
-      smoothing: 0.5,
-      streamline: 0.5,
+    const outline = getStroke(s.map(p => [p.x, p.y, p.pressure]), {
+      size: 14, thinning: 0.5, smoothing: 0.5, streamline: 0.5,
     });
-
-    ctx.beginPath();
+    context.beginPath();
     // @ts-ignore
-    outline.forEach(([x, y], i) => {
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.fill();
+    outline.forEach(([x, y], i) => i === 0 ? context.moveTo(x, y) : context.lineTo(x, y));
+    context.fill();
   });
 }
 
-drawingCanvas.addEventListener('pointerdown', (e) => {
-  if (isReplaying) return; // Prevent drawing during replay
+function render(partial: Stroke[] = strokes) {
+  renderStrokes(drawingCanvas, ctx, partial);
+}
+
+function renderSelectedReference() {
+  const ref = getSelectedReference();
+  if (!ref) {
+    refCtx.fillStyle = '#fafafa';
+    refCtx.fillRect(0, 0, refCanvas.width, refCanvas.height);
+    refCtx.fillStyle = '#888';
+    refCtx.font = '16px system-ui';
+    refCtx.textAlign = 'center';
+    refCtx.fillText('No reference selected', refCanvas.width / 2, refCanvas.height / 2);
+    return;
+  }
+  renderStrokes(refCanvas, refCtx, ref.referenceStrokes);
+}
+
+// ── Mode switching ────────────────────────────────────────────────────────────
+function setMode(newMode: AppMode) {
+  mode = newMode;
+
+  if (mode === 'record-reference') {
+    modeLabel.textContent = 'Mode: Drawing Reference';
+    modeToggle.textContent = '🧪 Switch to Test Mode';
+    refPanel.style.display = 'flex';
+    testPanel.style.display = 'none';
+    validateBtn.style.display = 'none';
+    saveRefBtn.style.display = '';
+
+    refCtx.fillStyle = '#fafafa';
+    refCtx.fillRect(0, 0, refCanvas.width, refCanvas.height);
+    refCtx.fillStyle = '#6366f1';
+    refCtx.font = '16px system-ui';
+    refCtx.textAlign = 'center';
+    refCtx.fillText('← Your reference will appear here after saving', refCanvas.width / 2, refCanvas.height / 2);
+  } else {
+    modeLabel.textContent = 'Mode: Testing';
+    modeToggle.textContent = '✏️ Draw a New Reference';
+    refPanel.style.display = 'none';
+    testPanel.style.display = 'flex';
+    validateBtn.style.display = '';
+    saveRefBtn.style.display = 'none';
+    renderSelectedReference();
+  }
+
+  clearStrokes();
+}
+
+modeToggle.addEventListener('click', () => {
+  setMode(mode === 'record-reference' ? 'test' : 'record-reference');
+});
+
+// ── Reference management ──────────────────────────────────────────────────────
+saveRefBtn.addEventListener('click', () => {
+  if (strokes.length === 0) {
+    outputLog.textContent = '⚠ Draw the reference shape first, then save it.';
+    return;
+  }
+  const label = refLabelInput.value.trim() || `Reference ${savedReferences.length + 1}`;
+
+  let fingerprint;
+  try {
+    fingerprint = FeatureExtractor.extract(strokes);
+  } catch (e) {
+    outputLog.textContent = `⚠ Could not extract features: ${e}`;
+    return;
+  }
+
+  const profile = createReferenceProfile(label, strokes, fingerprint);
+  savedReferences.push(profile);
+
+  localStorage.setItem('dysgraphia_refs', JSON.stringify(savedReferences));
+
+  rebuildRefSelect();
+  refSelect.value = profile.id;
+
+  outputLog.textContent = `✓ Reference "${label}" saved.\nFingerprint: ${JSON.stringify(fingerprint, null, 2)}`;
+
+  renderStrokes(refCanvas, refCtx, strokes);
+  clearStrokes();
+});
+
+function rebuildRefSelect() {
+  refSelect.innerHTML = '<option value="">-- choose reference --</option>';
+  savedReferences.forEach(ref => {
+    const opt = document.createElement('option');
+    opt.value = ref.id;
+    opt.textContent = ref.label;
+    refSelect.appendChild(opt);
+  });
+}
+
+refSelect.addEventListener('change', renderSelectedReference);
+
+function getSelectedReference(): ReferenceProfile | undefined {
+  return savedReferences.find(r => r.id === refSelect.value);
+}
+
+try {
+  const stored = localStorage.getItem('dysgraphia_refs');
+  if (stored) {
+    savedReferences = JSON.parse(stored) as ReferenceProfile[];
+    rebuildRefSelect();
+  }
+} catch {
+  // fresh start
+}
+
+// ── Drawing ───────────────────────────────────────────────────────────────────
+drawingCanvas.addEventListener('pointerdown', e => {
+  if (isReplaying) return;
   drawingCanvas.setPointerCapture(e.pointerId);
   currentStroke = [{ x: e.offsetX, y: e.offsetY, pressure: e.pressure, timestamp: Date.now() }];
   strokes.push(currentStroke);
 });
 
-drawingCanvas.addEventListener('pointermove', (e) => {
+drawingCanvas.addEventListener('pointermove', e => {
   if (e.buttons !== 1 || isReplaying) return;
   currentStroke.push({ x: e.offsetX, y: e.offsetY, pressure: e.pressure, timestamp: Date.now() });
   render();
 });
 
-shapeSelect.addEventListener('change', () => {
-  clearCanvas();
-  drawReference();
-});
+// ── Clear / Replay ────────────────────────────────────────────────────────────
+clearBtn.addEventListener('click', clearStrokes);
 
-clearBtn.addEventListener('click', clearCanvas);
-
-function clearCanvas() {
+function clearStrokes() {
   strokes = [];
   if (replayReqId) cancelAnimationFrame(replayReqId);
   isReplaying = false;
-  outputLog.textContent = 'Waiting for input...';
+  outputLog.textContent = 'Waiting for input…';
   outputLog.style.color = '#fff';
   render();
 }
 
-// --- VISUAL REPLAY LOGIC ---
 replayBtn.addEventListener('click', () => {
   if (strokes.length === 0 || isReplaying) return;
-  
   isReplaying = true;
-  outputLog.textContent = 'Replaying...';
-  
-  const allPoints = strokes.flat();
-  const startTime = allPoints[0].timestamp;
-  const duration = allPoints[allPoints.length - 1].timestamp - startTime;
-  
-  let animationStart = performance.now();
+  outputLog.textContent = 'Replaying…';
 
-  function replayLoop(now: number) {
-    const elapsed = now - animationStart;
-    const currentSimulatedTime = startTime + elapsed;
+  const all = strokes.flat();
+  const startTime = all[0].timestamp;
+  const duration = all[all.length - 1].timestamp - startTime;
+  const animStart = performance.now();
 
-    // Filter strokes to only include points drawn up to 'currentSimulatedTime'
-    const partialStrokes = strokes.map(stroke => {
-      return stroke.filter(p => p.timestamp <= currentSimulatedTime);
-    }).filter(stroke => stroke.length > 0);
-
-    render(partialStrokes);
-
+  function loop(now: number) {
+    const elapsed = now - animStart;
+    const simTime = startTime + elapsed;
+    const partial = strokes.map(s => s.filter(p => p.timestamp <= simTime)).filter(s => s.length > 0);
+    render(partial);
     if (elapsed < duration) {
-      replayReqId = requestAnimationFrame(replayLoop);
+      replayReqId = requestAnimationFrame(loop);
     } else {
       isReplaying = false;
-      render(); // Ensure final render includes everything
+      render();
       outputLog.textContent = 'Replay complete.';
     }
   }
-
-  replayReqId = requestAnimationFrame(replayLoop);
+  replayReqId = requestAnimationFrame(loop);
 });
 
-// --- UNIFIED EVALUATION ENGINE ---
+// ── Validation (test mode only) ───────────────────────────────────────────────
 validateBtn.addEventListener('click', () => {
   if (strokes.length === 0 || isReplaying) return;
-  
-  const selectedShape = shapeSelect.value;
-  
+
+  const reference = getSelectedReference();
+  if (!reference) {
+    outputLog.textContent = '⚠ Select a reference before validating.';
+    outputLog.style.color = '#f59e0b';
+    return;
+  }
+
   const results = {
-    reversal: reversalRule.evaluate(strokes, selectedShape),
-    timeTaken: timeRule.evaluate(strokes, selectedShape),
-    proportion: propRule.evaluate(strokes, selectedShape),
-    process: processRule.evaluate(strokes, selectedShape),
-    similarity: similarityRule.evaluate(strokes, selectedShape)
+    reversal:   reversalRule.evaluate(strokes, reference),
+    timeTaken:  timeRule.evaluate(strokes, reference),
+    proportion: propRule.evaluate(strokes, reference),
+    similarity: similarityRule.evaluate(strokes, reference),
   };
 
-  outputLog.textContent = JSON.stringify(results, null, 2);
-
-  // Simple fail-check: if any rule fails, color it amber or red
   const allPassed = Object.values(results).every(r => r.passed);
   outputLog.style.color = allPassed ? '#10b981' : '#f59e0b';
+  outputLog.textContent = JSON.stringify(results, null, 2);
 });
 
-drawReference();
+// ── Boot ──────────────────────────────────────────────────────────────────────
+setMode('record-reference');
 render();

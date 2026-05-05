@@ -8,39 +8,48 @@
 <body>
   <div class="app-container">
     <header>
-      <h1>Kinematic Feature Analysis</h1>
+      <div class="header-row">
+        <h1>Kinematic Feature Analysis</h1>
+        <span id="mode-label" class="mode-badge">Mode: Drawing Reference</span>
+      </div>
+
       <div class="controls">
-        <select id="shape-select">
-          <option value="s">s</option>
-          <option value="z">z</option>
-          <option value="b">b</option>
-          <option value="d">d</option>
-          <option value="p">p</option>
-          <option value="q">q</option>
-          <option value="j">j</option>
-          <option value="3">3</option>
-          <option value="7">7</option>
-          <option value="spiral">Spiral (Tremor Test)</option>
-        </select>
+        <!-- Mode toggle -->
+        <button id="mode-toggle" class="primary">🧪 Switch to Test Mode</button>
         <button id="clear-btn">Clear</button>
         <button id="replay-btn">▶ Replay</button>
-        <button id="validate-btn" class="primary">Validate Strokes</button>
+
+        <!-- Reference-drawing controls (visible in record-reference mode) -->
+        <div id="ref-controls" class="inline-controls">
+          <input id="ref-label" type="text" placeholder='Label, e.g. "lowercase b"' />
+          <button id="save-ref-btn" class="accent">💾 Save as Reference</button>
+        </div>
+
+        <!-- Test-mode controls (visible in test mode) -->
+        <div id="test-controls" class="inline-controls" style="display:none">
+          <select id="ref-select">
+            <option value="">-- choose reference --</option>
+          </select>
+          <button id="validate-btn" class="primary" style="display:none">✓ Validate</button>
+        </div>
       </div>
     </header>
 
     <main class="workspace">
       <div class="panel">
         <h3>Reference</h3>
+        <p class="panel-hint">Saved reference is shown here.</p>
         <canvas id="reference-canvas" width="400" height="400"></canvas>
       </div>
       <div class="panel">
-        <h3>Draw Here</h3>
+        <h3 id="draw-panel-title">Draw Reference Here</h3>
+        <p class="panel-hint" id="draw-panel-hint">Draw the shape, then click "Save as Reference".</p>
         <canvas id="drawing-canvas" width="400" height="400" style="touch-action: none;"></canvas>
       </div>
     </main>
 
     <footer id="results-panel">
-      <pre id="output-log">Waiting for input...</pre>
+      <pre id="output-log">Waiting for input…</pre>
     </footer>
   </div>
   <script type="module" src="./main.ts"></script>
